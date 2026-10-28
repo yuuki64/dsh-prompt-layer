@@ -34,6 +34,22 @@ curl -fsSL https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/insta
 
 跑完**完全退出宿主再打开**（托盘也要退），聊天里输 `/prompt-layer status`；然后把你的提示词写进 `~/.dsh/prompt-layer.md`（写文件即时生效）。
 
+### 想直接用作者同款正文
+
+仓库里有一份作者在用的 `prompt.full.md`，一条命令覆盖过去即可（会自动盖掉安装时建的空文件）：
+
+```powershell
+irm https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/prompt.full.md -OutFile "$env:USERPROFILE\.dsh\prompt-layer.md"
+```
+
+macOS / Linux：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/prompt.full.md -o ~/.dsh/prompt-layer.md
+```
+
+覆盖不用重启（文件按修改时间热读），`/prompt-layer status` 里长度变成 25900 左右就是接上了。不用这份正文的话，自己写 `~/.dsh/prompt-layer.md` 就行。
+
 > 国内访问 `raw.githubusercontent.com` 不通时，换成 jsDelivr 镜像：
 > `irm https://cdn.jsdelivr.net/gh/yuuki64/dsh-prompt-layer@main/install.ps1 | iex`
 > （jsDelivr 对分支有缓存，更新可能延迟十几小时）
