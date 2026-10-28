@@ -16,7 +16,28 @@
 - 不写入/覆盖 `AGENTS.md`、不管理规则集
 - 不联网
 
-## 安装
+## 一条命令安装
+
+Windows（PowerShell）：
+
+```powershell
+irm https://cdn.jsdelivr.net/gh/yuuki64/dsh-prompt-layer@main/install.ps1 | iex
+```
+
+macOS / Linux：
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/yuuki64/dsh-prompt-layer@main/install.sh | bash
+```
+
+脚本只做四件事：把 `index.mjs` 复制进你的 DSH profile、建一个空的 `prompt-layer.md`、备份 `cordis.patch.yml`、在末尾追加插件配置（检测到已配置就跳过）。**不删除任何东西。**
+
+跑完**完全退出宿主再打开**（托盘也要退），聊天里输 `/prompt-layer status`；然后把你的提示词写进 `~/.dsh/prompt-layer.md`（写文件即时生效）。
+
+> 国内网络推荐 jsDelivr 那条；不通的话换成
+> `irm https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/install.ps1 | iex`。
+
+## 手动安装
 
 1. 把 `index.mjs` 复制到 profile 目录，改名 `prompt-layer.mjs`：
 
