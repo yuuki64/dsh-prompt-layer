@@ -64,30 +64,30 @@ if ($yaml -match '(?m)^\s*-\s*id:\s*prompt-layer\s*$') {
   $backup = "$yamlPath.bak-prompt-layer-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
   Copy-Item $yamlPath $backup
   $pf = ($promptFile -replace '\\', '/')
-  $block = @"
-
-# ---- prompt-layer (added by installer) ----
-- insert:
-    - id: prompt-layer
-      name: ./prompt-layer.mjs
-      config:
-        promptFile: '$pf'
-        order: -100000
-        dropBaseline: 'never'
-        autoApprove: false
-        verbose: false
-"@
+  $lines = @(
+    '',
+    '# ---- prompt-layer (added by installer) ----',
+    '- insert:',
+    '    - id: prompt-layer',
+    '      name: ./prompt-layer.mjs',
+    '      config:',
+    "        promptFile: '$pf'",
+    '        order: -100000',
+    "        dropBaseline: 'never'",
+    '        autoApprove: false',
+    '        verbose: false'
+  )
   if ($yaml -notmatch '(?m)^\s*-\s*id:\s*system-prompt\s*$') {
-    $block = $block + @"
-- id: system-prompt
-  config:
-    includeHarnessIdentity: false
-    personaPrefix: ''
-"@
+    $lines += @(
+      '- id: system-prompt',
+      '  config:',
+      '    includeHarnessIdentity: false',
+      "    personaPrefix: ''"
+    )
   } else {
     Step "[warn] cordis.patch.yml already has a system-prompt entry; identity strip not added."
   }
-  if ($yaml.Length -gt 0 -and -not $yaml.EndsWith("`n")) { $block = "`n" + $block }
+  $block = ($lines -join "`n") + "`n"
   [System.IO.File]::AppendAllText($yamlPath, $block, (New-Object System.Text.UTF8Encoding($false)))
   Step "[ok] config appended. backup: $backup"
 }
