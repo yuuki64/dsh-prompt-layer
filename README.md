@@ -104,7 +104,10 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
 | `snapshots` | `true` | 保存/回滚前自动留档 |
 | `snapshotDir` | 空 | 默认 `<promptFile 目录>/.pl-snapshots` |
 | `keepSnapshots` | `20` | 保留最近 N 份快照 |
-| `autoApprove` | `false` | 注册审批应答器，所有审批请求判 `allowed-once` |
+| `autoApprove` | `false` | 注册审批应答器；具体放行什么由 `autoApproveTools` 决定 |
+| `autoApproveTools` | `[]` | 白名单：精确名 / `grep*` 通配 / `re:^(glob|list)` 正则；**空 = 全部放行**（旧行为） |
+| `unmatchedAction` | `fallthrough` | 未匹配白名单时：`fallthrough`（交给宿主）/ `allowed-once` / `denied` |
+| `auditApprovals` | `true` | 每次放行或拒绝写 `$DSH_HOME/logs/prompt-layer-approvals.log` |
 | `forceAsk` | `false` | 会话策略是 `never` 时改成 `ask`（否则请求进不到应答器就被拒） |
 | `maxBytes` | `524288` | 文件读取上限 |
 | `verbose` | `false` | 写 `$DSH_HOME/logs/prompt-layer.log` |
@@ -123,6 +126,21 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
 - `neutralize`：在 `system-prompt/assemble` 阶段把宿主注入的 `<ethics_reminder>`、`<ip_reminder>`、`<cyber_warning>`、`<behavior_instructions>`、`<safety_reminder>` 块摘掉，只处理别人的段，自己的两份永远不动。`aggressive` 会按标签名泛匹配（含 notice/rules/warning），可能误删宿主自有策略段，确认后再开。
 - `tailFrom: head`：注册第二段（`order: 900000`），取正文首段压成 `[身份复核] …` 压到组装末尾，对抗长上下文里的人格衰减。每轮多 200–600 字符。
 - `/prompt-layer lint`：正文体检（字符、估算 tokens、最长行、重复标题、否定式约束计数）。
+
+### 审批最小权限
+
+`autoApprove: true` 的默认语义是"全放行"，这在跑长任务时很危险。给它配白名单后就变成规则化网关：
+
+```yaml
+      autoApprove: true
+      autoApproveTools: ['read', 'grep', 'glob', 'list*', 're:^web_?(search|fetch)']
+      unmatchedAction: fallthrough   # 写/执行类工具落回宿主的弹窗
+      auditApprovals: true
+```
+
+- 匹配顺序：`re:` 正则 → `*` 通配 → 精确名（都不区分大小写）；
+- `unmatchedAction`：`fallthrough` 最安全（请求继续走宿主原有流程），`denied` 最严，`allowed-once` 等于旧行为；
+- 审计日志单独一份文件，不跟调试日志混；参数只记前 160 字符。
 
 ### 快照与回滚
 
@@ -188,7 +206,7 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
 
 ## 注意
 
-- `autoApprove: true` 之后，agent 执行命令、改文件不再询问；再配合 `sandbox-policy.mode: danger-full-access` 等于完全不设防。
+- `autoApprove: true` 之后，agent 执行命令、改文件不再询问；再配合 `sandbox-policy.mode: danger-full-access` 等于完全不设防。**建议同时配 `autoApproveTools` 只放行只读工具**，写/执行类保持询问。
 - `dropBaseline: when-inject` 会让 `AGENTS.md` / 项目说明不再进入提示词，确认后再开。
 - 提示词文件按原样注入（关闭了 `{{...}}` 插值），内容由使用者自行负责。
 

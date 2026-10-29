@@ -26,6 +26,9 @@ const DEFAULTS = {
   tailFrom: "off", // off | head —— head = 取正文首段压到末尾
   tailOrder: 900000, // 收尾段顺序，越大越靠后
   autoApprove: false,
+  autoApproveTools: [], // 只放行匹配的工具名；空 = 全部放行（旧行为）
+  unmatchedAction: "fallthrough", // fallthrough | allowed-once | denied
+  auditApprovals: true, // 每次放行/拒绝写 logs/prompt-layer-approvals.log
   forceAsk: false,
   maxBytes: 512 * 1024,
   snapshots: true, // 保存/回滚前自动留档
@@ -96,6 +99,14 @@ export function diffLines(before, after, context = 2, maxLines = 60) {
 }
 function dshHome() {
   return process.env.DSH_HOME || join(homedir(), ".dsh");
+}
+
+function audit(msg) {
+  try {
+    appendFileSync(join(dshHome(), "logs", "prompt-layer-approvals.log"), `${new Date().toISOString()} ${msg}\n`);
+  } catch {
+    /* 尽力而为 */
+  }
 }
 
 function log(msg) {
@@ -374,8 +385,53 @@ export function apply(ctx, config = {}) {
 
   // ---- 3. 审批应答器 ----
   if (cfg.autoApprove) {
+    const allowPatterns = Array.isArray(cfg.autoApproveTools) ? cfg.autoApproveTools.filter(Boolean) : [];
+    const matchesAllow = (name, raw) => {
+      if (!allowPatterns.length) return true;
+      const target = String(name || "");
+      for (const pattern of allowPatterns) {
+        const value = String(pattern);
+        if (value.startsWith("re:")) {
+          try {
+            if (new RegExp(value.slice(3), "i").test(`${target} ${raw}`)) return true;
+          } catch {
+            /* 非法正则忽略 */
+          }
+          continue;
+        }
+        if (value.includes("*")) {
+          const source = value
+            .split("*")
+            .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join(".*");
+          if (new RegExp(`^${source}$`, "i").test(target)) return true;
+          continue;
+        }
+        if (value.toLowerCase() === target.toLowerCase()) return true;
+      }
+      return false;
+    };
     const answer = (req) => {
-      if (cfg.verbose) log(`auto-approve ${req?.tool ?? "?"}`);
+      const toolName = String(req?.tool ?? req?.toolName ?? req?.name ?? "");
+      let raw = "";
+      try {
+        raw = JSON.stringify(req?.input ?? req?.args ?? {});
+      } catch {
+        raw = "";
+      }
+      if (!matchesAllow(toolName, raw)) {
+        if (cfg.unmatchedAction === "denied") {
+          if (cfg.auditApprovals) audit(`denied ${toolName || "?"} ${raw.slice(0, 160)}`);
+          return "denied";
+        }
+        if (cfg.unmatchedAction === "allowed-once") {
+          if (cfg.auditApprovals) audit(`auto-approve(unmatched) ${toolName || "?"} ${raw.slice(0, 160)}`);
+          return "allowed-once";
+        }
+        if (cfg.verbose) log(`approval fallthrough ${toolName || "?"}`);
+        return undefined;
+      }
+      if (cfg.auditApprovals) audit(`auto-approve ${toolName || "?"} ${raw.slice(0, 160)}`);
       return "allowed-once";
     };
     try {
@@ -391,7 +447,7 @@ export function apply(ctx, config = {}) {
         log(`approval hook failed: ${state.lastError}`);
       }
     }
-    log("autoApprove enabled: every approval request -> allowed-once");
+    log(`autoApprove enabled: rules=${allowPatterns.length || "all"} unmatched=${cfg.unmatchedAction || "fallthrough"}`);
   }
 
   // ---- 4. 策略兜底 ----
@@ -458,6 +514,8 @@ export function apply(ctx, config = {}) {
     snapshotDir: snapshotDirPath(),
     lastSnapshot: state.lastSnapshot || "",
     autoApprove: cfg.autoApprove,
+    autoApproveTools: Array.isArray(cfg.autoApproveTools) ? cfg.autoApproveTools : [],
+    unmatchedAction: cfg.unmatchedAction || "fallthrough",
     forceAsk: cfg.forceAsk,
     approvalOk: state.approvalOk,
     commandOk: state.commandOk,
@@ -693,6 +751,7 @@ export function apply(ctx, config = {}) {
         `  收尾复述     ${cfg.tailFile || (cfg.tailFrom === "head" ? "head 自动" : "关")}`,
         `  快照         ${snapshotList().length} 份${cfg.snapshots ? "" : "（已关）"}`,
         `  免审批       ${cfg.autoApprove ? "开" : "关"}${cfg.forceAsk ? "（策略兜底 ask）" : ""}`,
+        `  放行规则     ${Array.isArray(cfg.autoApproveTools) && cfg.autoApproveTools.length ? cfg.autoApproveTools.join(",") : "全部放行"}${cfg.autoApprove && cfg.autoApproveTools?.length ? `（未匹配 ${cfg.unmatchedAction || "fallthrough"}）` : ""}`,
         `  审批钩子     ${state.approvalOk ? "已挂" : "未挂或未启用"}`,
         `  最近错误     ${state.lastError || "无"}`,
       ];

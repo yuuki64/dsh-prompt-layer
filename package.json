@@ -1,6 +1,6 @@
 {
   "name": "dsh-prompt-layer",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness 提示词层：最高优先级注入 + 可选审批放行 + 右下角面板",
