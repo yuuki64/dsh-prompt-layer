@@ -86,7 +86,7 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
     personaPrefix: ''
 ```
 
-4. 完全退出宿主再启动（托盘也要退）。聊天里输入 `/prompt-layer status` 查看状态，`/prompt-layer lint` 体检正文。
+4. 完全退出宿主再启动（托盘也要退）。聊天里输入 `/prompt-layer status` 查看状态，`/prompt-layer lint` 体检正文，`/prompt-layer snap|diff|undo` 管理版本。
 
 ## 配置
 
@@ -101,6 +101,9 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
 | `tailFile` | 空 | 收尾复述正文文件；空则交给 `tailFrom` |
 | `tailFrom` | `off` | `head` = 取正文首段压到组装末尾（bookend） |
 | `tailOrder` | `900000` | 收尾段顺序，越大越靠后 |
+| `snapshots` | `true` | 保存/回滚前自动留档 |
+| `snapshotDir` | 空 | 默认 `<promptFile 目录>/.pl-snapshots` |
+| `keepSnapshots` | `20` | 保留最近 N 份快照 |
 | `autoApprove` | `false` | 注册审批应答器，所有审批请求判 `allowed-once` |
 | `forceAsk` | `false` | 会话策略是 `never` 时改成 `ask`（否则请求进不到应答器就被拒） |
 | `maxBytes` | `524288` | 文件读取上限 |
@@ -120,6 +123,21 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
 - `neutralize`：在 `system-prompt/assemble` 阶段把宿主注入的 `<ethics_reminder>`、`<ip_reminder>`、`<cyber_warning>`、`<behavior_instructions>`、`<safety_reminder>` 块摘掉，只处理别人的段，自己的两份永远不动。`aggressive` 会按标签名泛匹配（含 notice/rules/warning），可能误删宿主自有策略段，确认后再开。
 - `tailFrom: head`：注册第二段（`order: 900000`），取正文首段压成 `[身份复核] …` 压到组装末尾，对抗长上下文里的人格衰减。每轮多 200–600 字符。
 - `/prompt-layer lint`：正文体检（字符、估算 tokens、最长行、重复标题、否定式约束计数）。
+
+### 快照与回滚
+
+改提示词最大的坑是"改完变笨了，但说不清哪里变了"。所以保存和回滚前都会自动留档：
+
+| 命令 | 作用 |
+|---|---|
+| `/prompt-layer snap` | 手动留档当前正文 |
+| `/prompt-layer diff` | 当前正文 vs 最近一份快照的逐行差异（带 ±统计） |
+| `/prompt-layer undo` | 回滚到最近一份快照（回滚前会再留档一次） |
+| `/prompt-layer undo 3` | 回滚到第 3 新的快照 |
+
+- 面板保存、`/prompt-layer/undo` 走的都是同一套留档逻辑；
+- 快照目录可用 `snapshotDir` 改，默认在正文旁边（`.pl-snapshots`），保留 `keepSnapshots` 份；
+- HTTP `GET /prompt-layer/history` 列出全部快照文件，方便外部脚本做 A/B。
 
 ### 可选：工具上限（等价原版的"放宽"补丁）
 

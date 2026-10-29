@@ -8,9 +8,9 @@
  *   4. 可选注册 approval 应答器（allowed-once），并把会话策略兜底成 ask
  *   5. /prompt-layer status|reload|path 命令、HTTP 接口（面板用）、日志
  */
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export const name = "prompt-layer";
 export const inject = ["systemPrompt"];
@@ -28,9 +28,72 @@ const DEFAULTS = {
   autoApprove: false,
   forceAsk: false,
   maxBytes: 512 * 1024,
+  snapshots: true, // 保存/回滚前自动留档
+  snapshotDir: "", // 默认 <promptFile 目录>/.pl-snapshots
+  keepSnapshots: 20, // 保留最近 N 份
   verbose: false,
 };
 
+export function diffLines(before, after, context = 2, maxLines = 60) {
+  const a = String(before ?? '').replace(/\r\n/g, '\n').split('\n');
+  const b = String(after ?? '').replace(/\r\n/g, '\n').split('\n');
+  const n = a.length;
+  const m = b.length;
+  if (n * m > 4000000) return [`（过大：${n} 行 → ${m} 行，跳过逐行对比）`];
+  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push({ sign: ' ', line: a[i] });
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ sign: '-', line: a[i] });
+      i += 1;
+    } else {
+      ops.push({ sign: '+', line: b[j] });
+      j += 1;
+    }
+  }
+  while (i < n) {
+    ops.push({ sign: '-', line: a[i] });
+    i += 1;
+  }
+  while (j < m) {
+    ops.push({ sign: '+', line: b[j] });
+    j += 1;
+  }
+  const changed = ops.map((op, index) => (op.sign === ' ' ? -1 : index)).filter((index) => index >= 0);
+  if (!changed.length) return ['（无差异）'];
+  const keep = new Set();
+  for (const index of changed) {
+    for (let k = index - context; k <= index + context; k += 1) {
+      if (k >= 0 && k < ops.length) keep.add(k);
+    }
+  }
+  const out = [];
+  let prev = -1;
+  for (const index of [...keep].sort((x, y) => x - y)) {
+    if (prev >= 0 && index !== prev + 1) out.push('…');
+    out.push(`${ops[index].sign}${ops[index].line}`);
+    prev = index;
+    if (out.length >= maxLines) {
+      out.push('…（截断）');
+      break;
+    }
+  }
+  const added = ops.filter((op) => op.sign === '+').length;
+  const removed = ops.filter((op) => op.sign === '-').length;
+  out.unshift(`+${added} / -${removed}`);
+  return out;
+}
 function dshHome() {
   return process.env.DSH_HOME || join(homedir(), ".dsh");
 }
@@ -391,6 +454,9 @@ export function apply(ctx, config = {}) {
     tailFrom: cfg.tailFrom || "off",
     tailOrder: cfg.tailOrder,
     tailChars: tailState.chars,
+    snapshots: snapshotList().length,
+    snapshotDir: snapshotDirPath(),
+    lastSnapshot: state.lastSnapshot || "",
     autoApprove: cfg.autoApprove,
     forceAsk: cfg.forceAsk,
     approvalOk: state.approvalOk,
@@ -399,8 +465,60 @@ export function apply(ctx, config = {}) {
     exists: cfg.promptFile ? existsSync(cfg.promptFile) : false,
   });
 
+  // ---- 快照：改前留档，可回滚 ----
+  function snapshotDirPath() {
+    if (!cfg.snapshots) return '';
+    if (cfg.snapshotDir) return cfg.snapshotDir;
+    if (!cfg.promptFile) return '';
+    return join(dirname(cfg.promptFile), '.pl-snapshots');
+  }
+
+  function snapshotList() {
+    const dir = snapshotDirPath();
+    if (!dir || !existsSync(dir)) return [];
+    try {
+      return readdirSync(dir)
+        .filter((file) => file.endsWith('.md'))
+        .sort()
+        .reverse();
+    } catch {
+      return [];
+    }
+  }
+
+  function pruneSnapshots() {
+    const dir = snapshotDirPath();
+    const keep = Math.max(1, Number(cfg.keepSnapshots) || 20);
+    const list = snapshotList();
+    for (const file of list.slice(keep)) {
+      try {
+        unlinkSync(join(dir, file));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  function snapshotNow(reason = 'auto') {
+    const dir = snapshotDirPath();
+    if (!dir || !cfg.promptFile || !existsSync(cfg.promptFile)) return '';
+    try {
+      mkdirSync(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const dest = join(dir, `${stamp}-${reason}.md`);
+      writeFileSync(dest, readFileSync(cfg.promptFile, 'utf8'), 'utf8');
+      pruneSnapshots();
+      state.lastSnapshot = dest;
+      log(`snapshot ${dest}`);
+      return dest;
+    } catch (error) {
+      state.lastError = String(error?.message ?? error);
+      return '';
+    }
+  }
   function savePrompt(text) {
     if (!cfg.promptFile) throw new Error("promptFile 未配置");
+    snapshotNow("pre-save");
     const tmp = `${cfg.promptFile}.${process.pid}.${Date.now()}.tmp`;
     writeFileSync(tmp, String(text ?? ""), "utf8");
     renameSync(tmp, cfg.promptFile);
@@ -479,6 +597,17 @@ export function apply(ctx, config = {}) {
             sendJson(response, 200, { ok: true, chars: text.length });
           },
         });
+        reg({
+          kind: 'exact',
+          path: '/prompt-layer/history',
+          handler: (request, response) => {
+            if (!guard(request)) {
+              sendJson(response, 403, { ok: false });
+              return;
+            }
+            sendJson(response, 200, { ok: true, dir: snapshotDirPath(), files: snapshotList() });
+          },
+        });
         return () => {
           for (const f of un) {
             try {
@@ -497,13 +626,37 @@ export function apply(ctx, config = {}) {
   // ---- 6. 命令（等 commands 服务就绪再注册）----
   const commandSpec = {
     name: "prompt-layer",
-    description: "个人提示词层：status 状态；reload 重读；path 路径；lint 体检",
-    input: { hint: "status | reload | path | lint" },
+    description: "个人提示词层：status/reload/path/lint/snap/undo/diff",
+    input: { hint: "status | reload | path | lint | snap | undo [n] | diff" },
     handler: (invocation) => {
-      const arg = String(invocation?.rawInput ?? "").trim().split(/\s+/)[0] || "status";
+      const parts = String(invocation?.rawInput ?? "").trim().split(/\s+/);
+      const arg = parts[0] || 'status';
       if (arg === "reload") {
         const text = baseReader();
         return { kind: "success", text: `已重读 ${cfg.promptFile || "(未配置)"}：${text.length} 字符` };
+      }
+      if (arg === "snap") {
+        const dest = snapshotNow("manual");
+        return { kind: "success", text: dest ? `已留档 ${dest}` : "快照未启用，或没有可读的正文文件" };
+      }
+      if (arg === "undo") {
+        const list = snapshotList();
+        const index = Math.max(1, Number(parts[1]) || 1) - 1;
+        const file = list[index];
+        if (!file) return { kind: "success", text: "没有可回滚的快照" };
+        const dir = snapshotDirPath();
+        snapshotNow("pre-undo");
+        writeFileSync(cfg.promptFile, readFileSync(join(dir, file), "utf8"), "utf8");
+        const restored = baseReader();
+        return { kind: "success", text: `已回滚到 ${file}（${restored.length} 字符；回滚前已留档）` };
+      }
+      if (arg === "diff") {
+        const list = snapshotList();
+        if (!list.length) return { kind: "success", text: "没有快照可对比" };
+        const dir = snapshotDirPath();
+        const before = readFileSync(join(dir, list[0]), "utf8");
+        const current = cfg.promptFile && existsSync(cfg.promptFile) ? readFileSync(cfg.promptFile, "utf8") : "";
+        return { kind: "success", text: [`对比 ${list[0]} → 当前`, ...diffLines(before, current)].join("\n") };
       }
       if (arg === "lint") {
         const text = String(resolveText(null) || "");
@@ -538,6 +691,7 @@ export function apply(ctx, config = {}) {
         `  基线策略     ${cfg.dropBaseline}`,
         `  注入中和     ${cfg.neutralize || "off"}`,
         `  收尾复述     ${cfg.tailFile || (cfg.tailFrom === "head" ? "head 自动" : "关")}`,
+        `  快照         ${snapshotList().length} 份${cfg.snapshots ? "" : "（已关）"}`,
         `  免审批       ${cfg.autoApprove ? "开" : "关"}${cfg.forceAsk ? "（策略兜底 ask）" : ""}`,
         `  审批钩子     ${state.approvalOk ? "已挂" : "未挂或未启用"}`,
         `  最近错误     ${state.lastError || "无"}`,
