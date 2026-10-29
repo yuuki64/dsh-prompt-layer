@@ -115,7 +115,7 @@ export function apply(ctx, config = {}) {
   const order = Number.isFinite(cfg.order) ? cfg.order : DEFAULTS.order;
   const baseReader = makeReader(cfg.promptFile, cfg.maxBytes);
   const wsReaders = new Map();
-  const state = { lastSource: "", lastBytes: 0, lastError: "", approvalOk: false, askedFixed: false };
+  const state = { lastSource: "", lastBytes: 0, lastError: "", approvalOk: false, askedFixed: false, commandOk: false };
 
   function resolveText(context) {
     const cwd = cwdOf(context);
@@ -224,9 +224,19 @@ export function apply(ctx, config = {}) {
 
   // ---- 4. 策略兜底 ----
   const fixedAgents = new WeakSet();
+  let approvalSvc = null;
+  try {
+    // approval 服务可能在 apply 之后才就绪，等它出现再拿引用
+    ctx.inject(["approval"], (host) => {
+      approvalSvc = host?.approval ?? null;
+    });
+  } catch (error) {
+    log(`approval inject failed: ${error?.message ?? error}`);
+  }
+
   function ensureAsk(agent) {
     if (!cfg.forceAsk || !agent || fixedAgents.has(agent)) return;
-    const approval = ctx.get?.("approval");
+    const approval = approvalSvc || ctx.get?.("approval");
     if (!approval || typeof approval.setPolicy !== "function") return;
     fixedAgents.add(agent);
     try {
@@ -270,6 +280,7 @@ export function apply(ctx, config = {}) {
     autoApprove: cfg.autoApprove,
     forceAsk: cfg.forceAsk,
     approvalOk: state.approvalOk,
+    commandOk: state.commandOk,
     error: state.lastError || "",
     exists: cfg.promptFile ? existsSync(cfg.promptFile) : false,
   });
@@ -369,41 +380,54 @@ export function apply(ctx, config = {}) {
     log(`webServer inject failed: ${error?.message ?? error}`);
   }
 
-  // ---- 6. 命令 ----
+  // ---- 6. 命令（等 commands 服务就绪再注册）----
+  const commandSpec = {
+    name: "prompt-layer",
+    description: "个人提示词层：status 查看状态；reload 重读提示词；path 显示生效文件",
+    input: { hint: "status | reload | path" },
+    handler: (invocation) => {
+      const arg = String(invocation?.rawInput ?? "").trim().split(/\s+/)[0] || "status";
+      if (arg === "reload") {
+        const text = baseReader();
+        return { kind: "success", text: `已重读 ${cfg.promptFile || "(未配置)"}：${text.length} 字符` };
+      }
+      if (arg === "path") {
+        return { kind: "success", text: state.lastSource || cfg.promptFile || "(未配置)" };
+      }
+      const lines = [
+        "prompt-layer",
+        `  全局正文     ${cfg.promptFile || "(未配置)"}`,
+        `  工作区覆盖   ${cfg.workspaceFile || "(关)"}`,
+        `  当前生效     ${state.lastSource || "(还没读到)"}`,
+        `  当前长度     ${state.lastBytes} 字符`,
+        `  段顺序       ${order}`,
+        `  基线策略     ${cfg.dropBaseline}`,
+        `  免审批       ${cfg.autoApprove ? "开" : "关"}${cfg.forceAsk ? "（策略兜底 ask）" : ""}`,
+        `  审批钩子     ${state.approvalOk ? "已挂" : "未挂或未启用"}`,
+        `  最近错误     ${state.lastError || "无"}`,
+      ];
+      return { kind: "success", text: lines.join("\n") };
+    },
+  };
+
   try {
-    const commands = ctx.get?.("commands");
-    if (commands?.register) {
-      commands.register({
-        name: "prompt-layer",
-        description: "个人提示词层：status 查看状态；reload 重读提示词；path 显示生效文件",
-        input: { hint: "status | reload | path" },
-        handler: (invocation) => {
-          const arg = String(invocation?.rawInput ?? "").trim().split(/\s+/)[0] || "status";
-          if (arg === "reload") {
-            const text = baseReader();
-            return { kind: "success", text: `已重读 ${cfg.promptFile || "(未配置)"}：${text.length} 字符` };
-          }
-          if (arg === "path") {
-            return { kind: "success", text: state.lastSource || cfg.promptFile || "(未配置)" };
-          }
-          const lines = [
-            "prompt-layer",
-            `  全局正文     ${cfg.promptFile || "(未配置)"}`,
-            `  工作区覆盖   ${cfg.workspaceFile || "(关)"}`,
-            `  当前生效     ${state.lastSource || "(还没读到)"}`,
-            `  当前长度     ${state.lastBytes} 字符`,
-            `  段顺序       ${order}`,
-            `  基线策略     ${cfg.dropBaseline}`,
-            `  免审批       ${cfg.autoApprove ? "开" : "关"}${cfg.forceAsk ? "（策略兜底 ask）" : ""}`,
-            `  审批钩子     ${state.approvalOk ? "已挂" : "未挂或未启用"}`,
-            `  最近错误     ${state.lastError || "无"}`,
-          ];
-          return { kind: "success", text: lines.join("\n") };
-        },
-      });
-    }
+    ctx.inject(["commands"], (host) => {
+      const commands = host?.commands;
+      if (!commands || typeof commands.register !== "function") {
+        log("commands service present but has no register()");
+        return;
+      }
+      try {
+        commands.register(commandSpec);
+        state.commandOk = true;
+        log("command /prompt-layer registered");
+      } catch (error) {
+        state.lastError = String(error?.message ?? error);
+        log(`command register failed: ${state.lastError}`);
+      }
+    });
   } catch (error) {
-    log(`command register failed: ${error?.message ?? error}`);
+    log(`commands inject failed: ${error?.message ?? error}`);
   }
 
   if (cfg.verbose) log(`applied: order=${order} drop=${cfg.dropBaseline} approve=${cfg.autoApprove} forceAsk=${cfg.forceAsk}`);
