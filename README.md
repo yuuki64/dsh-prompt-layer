@@ -30,7 +30,7 @@ macOS / Linux：
 curl -fsSL https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/install.sh | bash
 ```
 
-脚本只做四件事：把 `index.mjs` 复制进你的 DSH profile、建一个空的 `prompt-layer.md`、备份 `cordis.patch.yml`、在末尾追加插件配置（检测到已配置就跳过）。**不删除任何东西。**
+脚本会装到 `$DSH_HOME/profiles/` 下所有 profile（desktop、web 一起），做四件事：把 `index.mjs` 复制进每个 profile、建一个空的 `prompt-layer.md`、备份各自的 `cordis.patch.yml`、在末尾追加配置（检测到已配置就跳过）。**不删除任何东西。**
 
 跑完**完全退出宿主再打开**（托盘也要退），聊天里输 `/prompt-layer status`；然后把你的提示词写进 `~/.dsh/prompt-layer.md`（写文件即时生效）。
 
@@ -92,12 +92,41 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `promptFile` | 空 | 提示词文本文件绝对路径；改文件即时生效 |
+| `promptFile` | 空 | 全局提示词文件绝对路径；改文件即时生效 |
+| `workspaceFile` | `.dsh-prompt-layer.md` | 工作区覆盖：当前目录存在这个文件就优先用它 |
 | `order` | `-100000` | 段顺序，越小越靠前（宿主身份是 `-1000`） |
 | `dropBaseline` | `never` | `never` 保留 AGENTS.md；`when-inject` 有注入就丢；`always` 总丢 |
-| `autoApprove` | `false` | 注册审批应答器，所有请求判 `allowed-once` |
+| `autoApprove` | `false` | 注册审批应答器，所有审批请求判 `allowed-once` |
+| `forceAsk` | `false` | 会话策略是 `never` 时改成 `ask`（否则请求进不到应答器就被拒） |
 | `maxBytes` | `524288` | 文件读取上限 |
 | `verbose` | `false` | 写 `$DSH_HOME/logs/prompt-layer.log` |
+
+安装脚本会装到 `$DSH_HOME/profiles/` 下**所有** profile（desktop、web…），并把 `autoApprove`、`forceAsk` 都设为 `true`。
+
+### 可选：工具上限（等价原版的"放宽"补丁）
+
+不想每次读文件被行数卡、子代理只能套三层，就在 profile 的 `cordis.patch.yml` 里追加这几段（键名是宿主官方 config，不会改源码）：
+
+```yaml
+- id: tool-fs
+  config:
+    readLimit: 20000
+    readMaxLineLength: 10000
+    readMaxBytes: 1048576
+- id: tool-result-pruner
+  config:
+    thresholdChars: 200000
+    headChars: 150000
+    tailChars: 20000
+- id: tool-subagent
+  config:
+    maxDepth: 10
+- id: repeat-tool-reminder
+  config:
+    thresholds: [200, 400]
+```
+
+改完重启宿主生效。
 
 ## 卸载
 
