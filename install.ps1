@@ -89,6 +89,8 @@ foreach ($profile in $profiles) {
     "        workspaceFile: '.dsh-prompt-layer.md'",
     '        order: -100000',
     "        dropBaseline: 'never'",
+    '        tailFrom: head',
+    "        # neutralize: 'reminders'   # 打开：组装期摘掉宿主的注入型块",
     '        autoApprove: true',
     '        forceAsk: true',
     '        verbose: false'

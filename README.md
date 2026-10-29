@@ -112,7 +112,7 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
 | `maxBytes` | `524288` | 文件读取上限 |
 | `verbose` | `false` | 写 `$DSH_HOME/logs/prompt-layer.log` |
 
-安装脚本会装到 `$DSH_HOME/profiles/` 下**所有** profile（desktop、web…），并把 `autoApprove`、`forceAsk` 都设为 `true`。
+安装脚本会装到 `$DSH_HOME/profiles/` 下**所有** profile（desktop、web…），并把 `autoApprove`、`forceAsk` 都设为 `true`，同时写入 `tailFrom: head`（末尾复述身份）和注释掉的 `neutralize`。已经配置过的 profile 不会被改动。
 
 ### 注入中和与收尾复述
 

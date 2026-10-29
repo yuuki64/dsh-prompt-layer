@@ -75,6 +75,8 @@ for profile in "${profiles[@]}"; do
     echo "        workspaceFile: '.dsh-prompt-layer.md'"
     echo "        order: -100000"
     echo "        dropBaseline: 'never'"
+    echo "        tailFrom: head"
+    echo "        # neutralize: 'reminders'"
     echo "        autoApprove: true"
     echo "        forceAsk: true"
     echo "        verbose: false"
