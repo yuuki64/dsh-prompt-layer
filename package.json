@@ -1,0 +1,19 @@
+{
+  "name": "dsh-prompt-layer",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DeepSeek Harness 提示词层：最高优先级注入 + 可选审批放行 + 右下角面板",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "license": "MIT"
+}

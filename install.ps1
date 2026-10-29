@@ -1,6 +1,7 @@
 # dsh-prompt-layer — one-line installer for Windows (PowerShell 5.1+)
 # Usage:  irm https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/install.ps1 | iex
-# Installs into every profile found under $DSH_HOME/profiles (desktop, web, ...).
+# Installs the package into every profile found under $DSH_HOME/profiles (desktop, web, ...):
+#   <profile>/node_modules/dsh-prompt-layer/{package.json,index.mjs,client.js}
 # Creates an empty prompt file, backs up cordis.patch.yml, appends config.
 # Never deletes anything.
 $ErrorActionPreference = 'Stop'
@@ -10,6 +11,7 @@ function Step([string]$msg) { Write-Host $msg }
 
 $repoRaw = 'https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main'
 $repoCdn = 'https://cdn.jsdelivr.net/gh/yuuki64/dsh-prompt-layer@main'
+$files = @('package.json', 'index.mjs', 'client.js')
 
 # ---- 1. DSH home ------------------------------------------------------------
 $candidates = @()
@@ -21,11 +23,9 @@ $dshHome = $candidates | Where-Object { $_ -and (Test-Path (Join-Path $_ 'profil
 if (-not $dshHome) { Fail "DSH data directory not found. Start DeepSeek Harness once, or set DSH_HOME." }
 Step "[1/4] DSH home: $dshHome"
 
-# ---- 2. profiles (all of them) ---------------------------------------------
-$profiles = @()
-$want = $env:PROMPT_LAYER_PROFILE
-if ($want) {
-  $profiles = @($want)
+# ---- 2. profiles ------------------------------------------------------------
+if ($env:PROMPT_LAYER_PROFILE) {
+  $profiles = @($env:PROMPT_LAYER_PROFILE)
 } else {
   $profiles = @(Get-ChildItem (Join-Path $dshHome 'profiles') -Directory |
     Where-Object { Test-Path (Join-Path $_.FullName 'package.json') } |
@@ -34,16 +34,19 @@ if ($want) {
 if ($profiles.Count -eq 0) { Fail "No profile found under $dshHome\profiles." }
 Step ("[2/4] profiles: " + ($profiles -join ', '))
 
-# ---- 3. download the plugin ------------------------------------------------
-$tmp = Join-Path $env:TEMP ("prompt-layer-" + [guid]::NewGuid().ToString('N') + ".mjs")
-$downloaded = $false
-foreach ($base in @($repoRaw, $repoCdn)) {
-  try { Invoke-WebRequest -UseBasicParsing -Uri "$base/index.mjs" -OutFile $tmp -TimeoutSec 30; $downloaded = $true; break } catch { }
+# ---- 3. download ------------------------------------------------------------
+$tmp = Join-Path $env:TEMP ("prompt-layer-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+foreach ($file in $files) {
+  $ok = $false
+  foreach ($base in @($repoRaw, $repoCdn)) {
+    try { Invoke-WebRequest -UseBasicParsing -Uri "$base/$file" -OutFile (Join-Path $tmp $file) -TimeoutSec 30; $ok = $true; break } catch { }
+  }
+  if (-not $ok) { Fail "Download failed: $file (GitHub raw and jsDelivr)." }
 }
-if (-not $downloaded) { Fail "Download failed (GitHub raw and jsDelivr). Check network." }
-Step "[3/4] plugin downloaded ($((Get-Item $tmp).Length) bytes)"
+Step "[3/4] package downloaded ($((Get-ChildItem $tmp).Count) files)"
 
-# ---- 4. per profile: copy plugin + config ----------------------------------
+# ---- 4. install per profile -------------------------------------------------
 $promptFile = Join-Path $dshHome 'prompt-layer.md'
 if (-not (Test-Path $promptFile)) {
   New-Item -ItemType File -Path $promptFile | Out-Null
@@ -56,8 +59,11 @@ $pf = ($promptFile -replace '\\', '/')
 foreach ($profile in $profiles) {
   $pdir = Join-Path $dshHome ("profiles\" + $profile)
   if (-not (Test-Path $pdir)) { Step "[warn] profile dir missing: $pdir"; continue }
-  Copy-Item $tmp (Join-Path $pdir 'prompt-layer.mjs') -Force
-  Step "  - $profile : plugin -> $(Join-Path $pdir 'prompt-layer.mjs')"
+
+  $pkgDir = Join-Path $pdir 'node_modules\dsh-prompt-layer'
+  New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+  foreach ($file in $files) { Copy-Item (Join-Path $tmp $file) (Join-Path $pkgDir $file) -Force }
+  Step "  - $profile : package -> $pkgDir"
 
   $yamlPath = Join-Path $pdir 'cordis.patch.yml'
   if (-not (Test-Path $yamlPath)) { New-Item -ItemType File -Path $yamlPath | Out-Null }
@@ -77,7 +83,7 @@ foreach ($profile in $profiles) {
     '# ---- prompt-layer (added by installer) ----',
     '- insert:',
     '    - id: prompt-layer',
-    '      name: ./prompt-layer.mjs',
+    '      name: dsh-prompt-layer',
     '      config:',
     "        promptFile: '$pf'",
     "        workspaceFile: '.dsh-prompt-layer.md'",
@@ -102,9 +108,9 @@ foreach ($profile in $profiles) {
   Step "  - $profile : config appended (backup: $(Split-Path $backup -Leaf))"
 }
 
-Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
 Step ""
 Step "Done. Fully quit DeepSeek Harness (tray icon too), reopen it,"
-Step "then type /prompt-layer status in chat."
+Step "then type /prompt-layer status in chat (or click the PL button bottom-right)."
 Step "Prompt text file: $promptFile"

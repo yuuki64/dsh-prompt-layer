@@ -1,14 +1,14 @@
 /**
- * prompt-layer — 个人提示词层（单文件 cordis 插件）
+ * prompt-layer — 个人提示词层（cordis 插件，服务端部分）
  *
  * 全部走宿主公开扩展点，不修改任何 @deepseek-ai 文件：
  *   1. systemPrompt 段（order 可配，默认 -100000）顶到最前，正文来自外部文件，按 mtime 热读
  *   2. 可选按工作区覆盖：cwd 下存在 workspaceFile 时优先用它
  *   3. 可选丢弃宿主 workspace 基线段（默认不丢）
  *   4. 可选注册 approval 应答器（allowed-once），并把会话策略兜底成 ask
- *   5. /prompt-layer status|reload|path 命令 + 日志
+ *   5. /prompt-layer status|reload|path 命令、HTTP 接口（面板用）、日志
  */
-import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -21,7 +21,7 @@ const DEFAULTS = {
   order: -100000,
   dropBaseline: "never", // never | when-inject | always
   autoApprove: false,
-  forceAsk: false, // 会话策略是 never 时改成 ask，保证应答器能被调用
+  forceAsk: false,
   maxBytes: 512 * 1024,
   verbose: false,
 };
@@ -34,11 +34,11 @@ function log(msg) {
   try {
     appendFileSync(join(dshHome(), "logs", "prompt-layer.log"), `${new Date().toISOString()} ${msg}\n`);
   } catch {
-    /* 日志尽力而为 */
+    /* 尽力而为 */
   }
 }
 
-/** mtime+size 缓存的文件读取；文件暂时不可读时沿用上一份。 */
+/** mtime+size 缓存；读失败沿用上一份。 */
 function makeReader(file, maxBytes) {
   let cache = { mtime: -1, size: -1, text: "" };
   return () => {
@@ -95,14 +95,28 @@ function cwdOf(context) {
   }
 }
 
+function sendJson(response, code, payload) {
+  const body = JSON.stringify(payload);
+  response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  response.end(body);
+}
+
+async function readBody(request) {
+  let body = "";
+  for await (const chunk of request) {
+    body += chunk;
+    if (body.length > 4 * 1024 * 1024) break;
+  }
+  return body;
+}
+
 export function apply(ctx, config = {}) {
   const cfg = { ...DEFAULTS, ...config };
   const order = Number.isFinite(cfg.order) ? cfg.order : DEFAULTS.order;
   const baseReader = makeReader(cfg.promptFile, cfg.maxBytes);
-  const wsReaders = new Map(); // 每个工作区一个 reader
+  const wsReaders = new Map();
   const state = { lastSource: "", lastBytes: 0, lastError: "", approvalOk: false, askedFixed: false };
 
-  /** 当前这一轮用哪份正文：工作区文件优先，否则全局文件。 */
   function resolveText(context) {
     const cwd = cwdOf(context);
     if (cfg.workspaceFile && cwd) {
@@ -125,7 +139,7 @@ export function apply(ctx, config = {}) {
     return text;
   }
 
-  // ---- 1. 顶到最前的提示词段 ----
+  // ---- 1. 提示词段 ----
   const register = () => {
     try {
       return ctx.systemPrompt.section({
@@ -164,7 +178,7 @@ export function apply(ctx, config = {}) {
     log(`register failed: ${error?.message ?? error}`);
   }
 
-  // ---- 2. 可选：丢 workspace 基线 ----
+  // ---- 2. 基线 ----
   if (cfg.dropBaseline === "always" || cfg.dropBaseline === "when-inject") {
     try {
       ctx.on(
@@ -208,7 +222,7 @@ export function apply(ctx, config = {}) {
     log("autoApprove enabled: every approval request -> allowed-once");
   }
 
-  // ---- 4. 策略兜底：never 会在进入应答器之前直接拒绝，先改成 ask ----
+  // ---- 4. 策略兜底 ----
   const fixedAgents = new WeakSet();
   function ensureAsk(agent) {
     if (!cfg.forceAsk || !agent || fixedAgents.has(agent)) return;
@@ -244,7 +258,118 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  // ---- 5. 命令 ----
+  // ---- 5. HTTP 接口（面板用）----
+  const statusPayload = () => ({
+    ok: true,
+    promptFile: cfg.promptFile || "",
+    workspaceFile: cfg.workspaceFile || "",
+    effective: state.lastSource || cfg.promptFile || "",
+    chars: state.lastBytes,
+    order,
+    dropBaseline: cfg.dropBaseline,
+    autoApprove: cfg.autoApprove,
+    forceAsk: cfg.forceAsk,
+    approvalOk: state.approvalOk,
+    error: state.lastError || "",
+    exists: cfg.promptFile ? existsSync(cfg.promptFile) : false,
+  });
+
+  function savePrompt(text) {
+    if (!cfg.promptFile) throw new Error("promptFile 未配置");
+    const tmp = `${cfg.promptFile}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, String(text ?? ""), "utf8");
+    renameSync(tmp, cfg.promptFile);
+    state.lastBytes = String(text ?? "").length;
+    state.lastSource = cfg.promptFile;
+  }
+
+  function guard(request) {
+    const site = String(request?.headers?.["sec-fetch-site"] || "");
+    return site !== "cross-site";
+  }
+
+  try {
+    ctx.inject(["webServer"], (host) => {
+      host.effect(() => {
+        const un = [];
+        const reg = (spec) => {
+          try {
+            const d = host.webServer.register(spec, "prompt-layer");
+            if (typeof d === "function") un.push(d);
+          } catch (error) {
+            log(`route ${spec.path} failed: ${error?.message ?? error}`);
+          }
+        };
+        reg({
+          kind: "exact",
+          path: "/prompt-layer/status",
+          handler: (request, response) => {
+            if (!guard(request)) {
+              sendJson(response, 403, { ok: false });
+              return;
+            }
+            sendJson(response, 200, statusPayload());
+          },
+        });
+        reg({
+          kind: "exact",
+          path: "/prompt-layer/text",
+          handler: (request, response) => {
+            if (!guard(request)) {
+              sendJson(response, 403, { ok: false });
+              return;
+            }
+            const text = cfg.promptFile && existsSync(cfg.promptFile) ? readFileSync(cfg.promptFile, "utf8") : "";
+            sendJson(response, 200, { ok: true, file: cfg.promptFile || "", text });
+          },
+        });
+        reg({
+          kind: "exact",
+          path: "/prompt-layer/save",
+          handler: async (request, response) => {
+            if (!guard(request) || request.method !== "POST") {
+              sendJson(response, 403, { ok: false });
+              return;
+            }
+            try {
+              const body = JSON.parse((await readBody(request)) || "{}");
+              savePrompt(body.text);
+              log(`saved ${String(body.text ?? "").length} chars to ${cfg.promptFile}`);
+              sendJson(response, 200, { ok: true, chars: String(body.text ?? "").length });
+            } catch (error) {
+              sendJson(response, 500, { ok: false, error: String(error?.message ?? error) });
+            }
+          },
+        });
+        reg({
+          kind: "exact",
+          path: "/prompt-layer/reload",
+          handler: (request, response) => {
+            if (!guard(request)) {
+              sendJson(response, 403, { ok: false });
+              return;
+            }
+            const text = baseReader();
+            wsReaders.clear();
+            sendJson(response, 200, { ok: true, chars: text.length });
+          },
+        });
+        return () => {
+          for (const f of un) {
+            try {
+              f();
+            } catch {
+              /* ignore */
+            }
+          }
+        };
+      });
+    });
+  } catch (error) {
+    log(`webServer inject failed: ${error?.message ?? error}`);
+  }
+
+  // ---- 6. 命令 ----
   try {
     const commands = ctx.get?.("commands");
     if (commands?.register) {

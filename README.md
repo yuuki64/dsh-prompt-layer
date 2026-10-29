@@ -128,9 +128,27 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
 
 改完重启宿主生效。
 
+## 面板
+
+重启后右下角有个 **PL** 圆按钮，点开是面板：
+
+- 显示当前正文文件、生效文件、字符数、基线策略、免审批状态
+- 直接在框里编辑正文 → **保存**（写回 `prompt-layer.md`，下一轮生效）
+- **重读**：重新读盘上的文件（外部改了文件但想看最新时用）
+
+面板是纯 DOM 注入，坏了只会少一个按钮，不会影响宿主界面。
+
+## 从单文件版升级
+
+旧版是把 `prompt-layer.mjs` 直接放在 profile 目录里。新版是 npm 包，装在 `<profile>/node_modules/dsh-prompt-layer/`：
+
+1. 删掉（或改名）`<profile>/prompt-layer.mjs`
+2. 把 `cordis.patch.yml` 里 `name: ./prompt-layer.mjs` 改成 `name: dsh-prompt-layer`
+3. 重跑安装脚本即可补上 `node_modules` 里的三个文件
+
 ## 卸载
 
-删掉 profile 里的 `prompt-layer.mjs`、删掉 yaml 里那两段、重启。
+删掉 `<profile>/node_modules/dsh-prompt-layer/`、删掉 yaml 里那几段、重启。
 
 ## 注意
 

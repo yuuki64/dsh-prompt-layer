@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # dsh-prompt-layer — one-line installer for macOS / Linux
 # Usage:  curl -fsSL https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/install.sh | bash
-# Installs into every profile found under $DSH_HOME/profiles (desktop, web, ...).
+# Installs the package into every profile under $DSH_HOME/profiles:
+#   <profile>/node_modules/dsh-prompt-layer/{package.json,index.mjs,client.js}
 # Creates an empty prompt file, backs up cordis.patch.yml, appends config.
 # Never deletes anything.
 set -euo pipefail
 
 RAW="https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main"
 CDN="https://cdn.jsdelivr.net/gh/yuuki64/dsh-prompt-layer@main"
+FILES="package.json index.mjs client.js"
 
 fail() { echo "[x] $1" >&2; exit 1; }
 
@@ -15,7 +17,6 @@ home="${DSH_HOME:-$HOME/.dsh}"
 [ -d "$home/profiles" ] || fail "DSH data dir not found: $home/profiles (start DeepSeek Harness once, or set DSH_HOME)"
 echo "[1/4] DSH home: $home"
 
-# ---- profiles ---------------------------------------------------------------
 profiles=()
 if [ -n "${PROMPT_LAYER_PROFILE:-}" ]; then
   profiles=("$PROMPT_LAYER_PROFILE")
@@ -28,14 +29,14 @@ fi
 [ ${#profiles[@]} -gt 0 ] || fail "no profile under $home/profiles"
 echo "[2/4] profiles: ${profiles[*]}"
 
-# ---- download ---------------------------------------------------------------
-tmp="$(mktemp "${TMPDIR:-/tmp}/prompt-layer-XXXXXX.mjs")"
-if ! curl -fsSL --max-time 30 "$RAW/index.mjs" -o "$tmp"; then
-  curl -fsSL --max-time 30 "$CDN/index.mjs" -o "$tmp" || fail "download failed (GitHub raw + jsDelivr)"
-fi
-echo "[3/4] plugin downloaded ($(wc -c < "$tmp" | tr -d ' ') bytes)"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/prompt-layer-XXXXXX")"
+for f in $FILES; do
+  if ! curl -fsSL --max-time 30 "$RAW/$f" -o "$tmp/$f"; then
+    curl -fsSL --max-time 30 "$CDN/$f" -o "$tmp/$f" || fail "download failed: $f"
+  fi
+done
+echo "[3/4] package downloaded"
 
-# ---- prompt file ------------------------------------------------------------
 prompt_file="$home/prompt-layer.md"
 if [ ! -f "$prompt_file" ]; then
   : > "$prompt_file"
@@ -44,12 +45,14 @@ else
   echo "[4/4] prompt file already exists: $prompt_file"
 fi
 
-# ---- per profile ------------------------------------------------------------
 for profile in "${profiles[@]}"; do
   pdir="$home/profiles/$profile"
   [ -d "$pdir" ] || { echo "[warn] profile dir missing: $pdir" >&2; continue; }
-  cp "$tmp" "$pdir/prompt-layer.mjs"
-  echo "  - $profile : plugin -> $pdir/prompt-layer.mjs"
+
+  pkg="$pdir/node_modules/dsh-prompt-layer"
+  mkdir -p "$pkg"
+  for f in $FILES; do cp "$tmp/$f" "$pkg/$f"; done
+  echo "  - $profile : package -> $pkg"
 
   yaml="$pdir/cordis.patch.yml"
   [ -f "$yaml" ] || : > "$yaml"
@@ -66,7 +69,7 @@ for profile in "${profiles[@]}"; do
     echo "# ---- prompt-layer (added by installer) ----"
     echo "- insert:"
     echo "    - id: prompt-layer"
-    echo "      name: ./prompt-layer.mjs"
+    echo "      name: dsh-prompt-layer"
     echo "      config:"
     echo "        promptFile: '$prompt_file'"
     echo "        workspaceFile: '.dsh-prompt-layer.md'"
@@ -87,8 +90,9 @@ for profile in "${profiles[@]}"; do
   echo "  - $profile : config appended (backup: $(basename "$backup"))"
 done
 
-rm -f "$tmp"
+rm -rf "$tmp"
 
 echo ""
-echo "Done. Fully quit DeepSeek Harness and reopen it, then type /prompt-layer status in chat."
+echo "Done. Fully quit DeepSeek Harness and reopen it, then type /prompt-layer status"
+echo "(or click the PL button at the bottom-right)."
 echo "Prompt text file: $prompt_file"
