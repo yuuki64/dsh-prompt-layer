@@ -1,5 +1,7 @@
-# dsh-prompt-layer — one-line installer for Windows (PowerShell 5.1+)
+# dsh-prompt-layer - one-line installer for Windows (PowerShell 5.1+)
 # Usage:  irm https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/install.ps1 | iex
+#         $env:PL_FULL=1; irm ... | iex   (same, plus writes the author's prompt.full.md)
+#         $env:PL_PROMPT_URL='https://.../x.md'; irm ... | iex   (use any prompt text file)
 # Installs the package into every profile found under $DSH_HOME/profiles (desktop, web, ...):
 #   <profile>/node_modules/dsh-prompt-layer/{package.json,index.mjs,client.js}
 # Creates an empty prompt file, backs up cordis.patch.yml, appends config.
@@ -8,6 +10,12 @@ $ErrorActionPreference = 'Stop'
 
 function Fail([string]$msg) { Write-Host "[x] $msg" -ForegroundColor Red; exit 1 }
 function Step([string]$msg) { Write-Host $msg }
+
+# Windows PowerShell 5.1 sometimes still defaults to TLS 1.0 against GitHub.
+try {
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.ServicePointManager]::SecurityProtocol
+} catch { }
+$ProgressPreference = 'SilentlyContinue'
 
 $repoRaw = 'https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main'
 $repoCdn = 'https://cdn.jsdelivr.net/gh/yuuki64/dsh-prompt-layer@main'
@@ -90,7 +98,7 @@ foreach ($profile in $profiles) {
     '        order: -100000',
     "        dropBaseline: 'never'",
     '        tailFrom: head',
-    "        # neutralize: 'reminders'   # 打开：组装期摘掉宿主的注入型块",
+    "        # neutralize: 'reminders'   # uncomment to strip host injection blocks",
     '        autoApprove: true',
     '        forceAsk: true',
     '        verbose: false'
@@ -108,6 +116,32 @@ foreach ($profile in $profiles) {
   $block = ($lines -join "`n") + "`n"
   [System.IO.File]::AppendAllText($yamlPath, $block, (New-Object System.Text.UTF8Encoding($false)))
   Step "  - $profile : config appended (backup: $(Split-Path $backup -Leaf))"
+}
+
+# ---- 5. optional: install the author's full prompt text ---------------------
+# Enabled by:  $env:PL_FULL=1   or   $env:PL_PROMPT_URL='https://.../prompt.md'
+if ($env:PL_FULL -or $env:PL_PROMPT_URL) {
+  $srcs = @()
+  if ($env:PL_PROMPT_URL) { $srcs += $env:PL_PROMPT_URL }
+  $srcs += @("$repoRaw/prompt.full.md", "$repoCdn/prompt.full.md")
+  $dl = Join-Path $tmp 'prompt.full.md'
+  $ok = $false
+  foreach ($u in $srcs) {
+    try { Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $dl -TimeoutSec 30; $ok = $true; break } catch { }
+  }
+  if (-not $ok) {
+    Step "[warn] full prompt download failed; prompt file left as-is"
+  } elseif ((Test-Path $promptFile) -and ((Get-FileHash $promptFile).Hash -eq (Get-FileHash $dl).Hash)) {
+    Step "  - full prompt already up to date"
+  } else {
+    if ((Test-Path $promptFile) -and ((Get-Item $promptFile).Length -gt 0)) {
+      $pbak = "$promptFile.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+      Copy-Item $promptFile $pbak
+      Step "  - prompt file backed up: $(Split-Path $pbak -Leaf)"
+    }
+    Copy-Item $dl $promptFile -Force
+    Step ("[5/5] full prompt installed: " + (Get-Item $promptFile).Length + " bytes -> $promptFile")
+  }
 }
 
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

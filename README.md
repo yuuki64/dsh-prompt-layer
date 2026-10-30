@@ -30,13 +30,27 @@ macOS / Linux：
 curl -fsSL https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/install.sh | bash
 ```
 
-脚本会装到 `$DSH_HOME/profiles/` 下所有 profile（desktop、web 一起），做四件事：把 `index.mjs` 复制进每个 profile、建一个空的 `prompt-layer.md`、备份各自的 `cordis.patch.yml`、在末尾追加配置（检测到已配置就跳过）。**不删除任何东西。**
+脚本会装到 `$DSH_HOME/profiles/` 下所有 profile（desktop、web 一起），做四件事：把 `index.mjs` 复制进每个 profile、建一个空的 `prompt-layer.md`、备份各自的 `cordis.patch.yml`、在末尾追加配置（检测到已配置就跳过）。**不删除任何东西。** 加 `PL_FULL=1` 会多做第五件：把作者的正文写成你的 `prompt-layer.md`。
 
 跑完**完全退出宿主再打开**（托盘也要退），聊天里输 `/prompt-layer status`；然后把你的提示词写进 `~/.dsh/prompt-layer.md`（写文件即时生效）。
 
-### 想直接用作者同款正文
+### 想直接用作者同款正文（装插件 + 写正文，一条命令）
 
-仓库里有一份作者在用的 `prompt.full.md`，一条命令覆盖过去即可（会自动盖掉安装时建的空文件）：
+Windows（PowerShell）：
+
+```powershell
+$env:PL_FULL=1; irm https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/install.ps1 | iex
+```
+
+macOS / Linux：
+
+```bash
+PL_FULL=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/install.sh)"
+```
+
+带 `PL_FULL=1` 时，脚本装完插件会再把仓库里的 `prompt.full.md`（作者正在用的正文）写进 `~/.dsh/prompt-layer.md`；目标文件非空会先备份成 `prompt-layer.md.bak-<时间戳>`。想换成别人的正文：`$env:PL_FULL=1; $env:PL_PROMPT_URL='https://.../x.md'; irm ... | iex`。
+
+也可以只覆盖正文、不动插件：
 
 ```powershell
 irm https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/prompt.full.md -OutFile "$env:USERPROFILE\.dsh\prompt-layer.md"
@@ -48,18 +62,21 @@ macOS / Linux：
 curl -fsSL https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/prompt.full.md -o ~/.dsh/prompt-layer.md
 ```
 
-覆盖不用重启（文件按修改时间热读），`/prompt-layer status` 里长度变成 25900 左右就是接上了。不用这份正文的话，自己写 `~/.dsh/prompt-layer.md` 就行。
+覆盖不用重启（文件按修改时间热读）。验收：`/prompt-layer status` 的「当前长度」显示 **14047 字符**（文件 25807 字节）就是和作者逐字节一致。不用这份正文的话，自己写 `~/.dsh/prompt-layer.md` 就行。
 
 > 国内访问 `raw.githubusercontent.com` 不通时，换成 jsDelivr 镜像：
 > `irm https://cdn.jsdelivr.net/gh/yuuki64/dsh-prompt-layer@main/install.ps1 | iex`
+> 带正文版：`$env:PL_FULL=1; irm https://cdn.jsdelivr.net/gh/yuuki64/dsh-prompt-layer@main/install.ps1 | iex`
 > （jsDelivr 对分支有缓存，更新可能延迟十几小时）
 
 ## 手动安装
 
-1. 把 `index.mjs` 复制到 profile 目录，改名 `prompt-layer.mjs`：
+1. 把三个文件放进 `<profile>/node_modules/dsh-prompt-layer/`（目录不存在就建）：
 
 ```powershell
-Copy-Item .\index.mjs "$env:USERPROFILE\.dsh\profiles\desktop\prompt-layer.mjs"
+$dst = "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\dsh-prompt-layer"
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Copy-Item .\package.json,.\index.mjs,.\client.js $dst
 ```
 
 2. 建一个提示词文件（内容自己写）：
@@ -73,7 +90,7 @@ notepad "$env:USERPROFILE\.dsh\prompt-layer.md"
 ```yaml
 - insert:
     - id: prompt-layer
-      name: ./prompt-layer.mjs
+      name: dsh-prompt-layer
       config:
         promptFile: 'C:\Users\<you>\.dsh\prompt-layer.md'
         order: -100000

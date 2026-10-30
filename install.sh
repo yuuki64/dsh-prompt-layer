@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # dsh-prompt-layer — one-line installer for macOS / Linux
 # Usage:  curl -fsSL https://raw.githubusercontent.com/yuuki64/dsh-prompt-layer/main/install.sh | bash
+#         PL_FULL=1 ... (same, plus writes the author's prompt.full.md as the prompt file)
 # Installs the package into every profile under $DSH_HOME/profiles:
 #   <profile>/node_modules/dsh-prompt-layer/{package.json,index.mjs,client.js}
 # Creates an empty prompt file, backs up cordis.patch.yml, appends config.
@@ -91,6 +92,30 @@ for profile in "${profiles[@]}"; do
   } >> "$yaml"
   echo "  - $profile : config appended (backup: $(basename "$backup"))"
 done
+
+# optional: install the author's full prompt text
+# Enabled by:  PL_FULL=1   or   PL_PROMPT_URL='https://.../prompt.md'
+if [ -n "${PL_FULL:-}" ] || [ -n "${PL_PROMPT_URL:-}" ]; then
+  srcs=""
+  if [ -n "${PL_PROMPT_URL:-}" ]; then srcs="$PL_PROMPT_URL"; fi
+  srcs="$srcs $RAW/prompt.full.md $CDN/prompt.full.md"
+  got=""
+  for u in $srcs; do
+    if curl -fsSL --max-time 30 "$u" -o "$tmp/prompt.full.md" 2>/dev/null; then got=1; break; fi
+  done
+  if [ -z "$got" ]; then
+    echo "[warn] full prompt download failed; prompt file left as-is" >&2
+  elif [ -s "$prompt_file" ] && cmp -s "$prompt_file" "$tmp/prompt.full.md"; then
+    echo "  - full prompt already up to date"
+  else
+    if [ -s "$prompt_file" ]; then
+      cp "$prompt_file" "$prompt_file.bak-$(date +%Y%m%d-%H%M%S)"
+      echo "  - prompt file backed up"
+    fi
+    cp "$tmp/prompt.full.md" "$prompt_file"
+    echo "[5/5] full prompt installed: $(wc -c < "$prompt_file" | tr -d ' ') bytes -> $prompt_file"
+  fi
+fi
 
 rm -rf "$tmp"
 
